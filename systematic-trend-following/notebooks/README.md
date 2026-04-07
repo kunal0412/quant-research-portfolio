@@ -84,6 +84,13 @@ The strategy is designed to capture sustained market trends while avoiding chopp
 
 ---
 
+## Results
+
+![Equity Curve](results/cumm_returns.png)
+![Kelly Equity Curve](results/cumm_kelly_returns.png)
+
+---
+
 ## Future Work
 
 * Test on multiple indices (NIFTY, NASDAQ, commodities)
