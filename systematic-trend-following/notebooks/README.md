@@ -1,5 +1,35 @@
 # Systematic Trend Following Strategy (SPY)
 
+## Strategy Snapshot
+
+* Asset: SPY (S&P 500 ETF)
+* Type: Systematic Trend Following
+* Timeframe: Intraday (5-min / 15-min)
+* Core Idea: Capture sustained trends using EMA crossover with volatility and momentum filters
+
+---
+
+## Performance Highlights
+
+| Metric            | Value |
+| ----------------- | ----- |
+| Cumulative Return | 144%  |
+| Sharpe Ratio      | 1.51  |
+| Max Drawdown      | 21%   |
+
+---
+
+## Key Edge
+
+Unlike naive EMA crossover systems, this strategy integrates:
+
+* ATR-based volatility filtering (avoids low-volatility traps)
+* Stochastic RSI confirmation (reduces false entries)
+* Ratio-based trend strength filter (cuts whipsaws)
+
+This significantly improves signal quality in choppy markets.
+
+
 ## Overview
 
 This project implements a systematic trend-following strategy on SPY using:
