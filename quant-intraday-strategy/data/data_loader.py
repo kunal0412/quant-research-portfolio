@@ -10,41 +10,60 @@ def load_kaggle_data(filepath, symbol="S&P500"):
     - symbol: asset_name to filter (e.g., 'S&P500', 'DAX', etc.)
 
     Returns:
-    - Clean pandas DataFrame with OHLCV data
+    - Clean pandas DataFrame with OHLCV data indexed by datetime
     """
 
-    # Load CSV
+    # =========================
+    # LOAD DATA
+    # =========================
     df = pd.read_csv(filepath)
 
     # Standardize column names
     df.columns = [col.lower().strip() for col in df.columns]
 
-    # Convert date column
+    # =========================
+    # DATE HANDLING
+    # =========================
     df['date'] = pd.to_datetime(df['date'], errors='coerce')
-
-    # Drop rows with invalid dates
     df = df.dropna(subset=['date'])
 
-    # Filter for selected asset
+    # =========================
+    # FILTER SYMBOL
+    # =========================
     df = df[df['asset_name'] == symbol]
 
     if df.empty:
         raise ValueError(f"No data found for asset: {symbol}")
 
-    # Sort by date
+    # =========================
+    # SORT + INDEX
+    # =========================
     df = df.sort_values('date')
-
-    # Set datetime index
     df.set_index('date', inplace=True)
 
-    # Keep only required columns
+    # =========================
+    # KEEP REQUIRED COLUMNS
+    # =========================
     required_cols = ['open', 'high', 'low', 'close', 'volume']
-    df = df[[col for col in required_cols if col in df.columns]]
 
-    # Drop duplicates
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        raise ValueError(f"Missing columns: {missing_cols}")
+
+    df = df[required_cols]
+
+    # =========================
+    # CLEANING
+    # =========================
     df = df[~df.index.duplicated(keep='first')]
 
-    # Final sanity check
+    # Ensure numeric
+    df = df.apply(pd.to_numeric, errors='coerce')
+
+    # Drop NaNs
     df = df.dropna()
+
+    # Remove zero/negative prices (data sanity)
+    df = df[(df['close'] > 0) & (df['high'] > 0) & (df['low'] > 0)]
 
     return df

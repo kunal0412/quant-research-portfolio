@@ -1,11 +1,24 @@
 import os
 import pandas as pd
+
 from data.data_loader import load_kaggle_data
 from strategy.signals import generate_signals
-from backtest.engine import generate_positions, apply_transaction_costs, run_backtest
+from backtest.engine import generate_positions, run_backtest
 
 
-# Build absolute path (prevents path issues)
+# =========================================
+# CONFIG
+# =========================================
+
+SYMBOL = "S&P500"
+INITIAL_CAPITAL = 1
+RISK_PER_TRADE = 0.01   # 1% risk
+
+
+# =========================================
+# LOAD DATA
+# =========================================
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 file_path = os.path.join(
@@ -14,41 +27,38 @@ file_path = os.path.join(
     "global_financial_markets_2000_Now.csv"
 )
 
-
-# Load data
-df = load_kaggle_data(
-    file_path,
-    symbol="S&P500"   # You can change this later
-)
+df = load_kaggle_data(file_path, symbol=SYMBOL)
 
 
-# Preview data
-print("\n--- HEAD ---")
-print(df.head())
-
-print("\n--- TAIL ---")
-print(df.tail())
-
-print("\n--- INFO ---")
-print(df.info())
-
+# =========================================
+# GENERATE SIGNALS
+# =========================================
 
 df = generate_signals(df)
 
-print(df[['close', 'ema_50', 'ema_200', 'signal']].tail(20))
 
-print("Total signals:", df['signal'].sum())
+# =========================================
+# RUN BACKTEST ENGINE
+# =========================================
 
-df = generate_positions(df)
-df = apply_transaction_costs(df)
+df = generate_positions(
+    df,
+    initial_capital=INITIAL_CAPITAL,
+    risk_pct=RISK_PER_TRADE
+)
+
 df = run_backtest(df)
 
-print("\n--- FINAL OUTPUT ---")
-print(df[['close', 'signal', 'position', 'capital', 'equity_curve']].tail())
 
-print("Final Equity:", df['equity_curve'].iloc[-1])
+# =========================================
+# TRADE ANALYTICS
+# =========================================
 
 def compute_trades(df):
+    """
+    Extracts completed trades with return and holding period.
+    """
+
     trades = []
 
     in_trade = False
@@ -79,16 +89,53 @@ def compute_trades(df):
 
             in_trade = False
 
-    trades_df = pd.DataFrame(trades)
+    return pd.DataFrame(trades)
 
-    return trades_df
 
 trades_df = compute_trades(df)
 
-print("Total Trades:", len(trades_df))
 
+# =========================================
+# PERFORMANCE METRICS
+# =========================================
+
+# Final equity
+final_equity = df['equity_curve'].iloc[-1]
+
+# Drawdown
 df['peak'] = df['equity_curve'].cummax()
 df['drawdown'] = (df['equity_curve'] - df['peak']) / df['peak']
-
 max_dd = df['drawdown'].min()
-print("Max Drawdown:", max_dd)
+
+# Trade stats
+total_trades = len(trades_df)
+
+if total_trades > 0:
+    win_rate = (trades_df['return'] > 0).mean()
+    avg_win = trades_df[trades_df['return'] > 0]['return'].mean()
+    avg_loss = trades_df[trades_df['return'] < 0]['return'].mean()
+    expectancy = (win_rate * avg_win) + ((1 - win_rate) * avg_loss)
+    avg_holding = trades_df['duration_days'].mean()
+else:
+    win_rate = avg_win = avg_loss = expectancy = avg_holding = 0
+
+
+# =========================================
+# OUTPUT
+# =========================================
+
+print("\n================ BACKTEST RESULTS ================\n")
+
+print("Final Equity        :", round(final_equity, 4))
+print("Max Drawdown        :", round(max_dd, 4))
+print("Total Trades        :", total_trades)
+
+print("\n--- Trade Stats ---")
+print("Win Rate            :", round(win_rate, 4))
+print("Avg Win             :", round(avg_win, 4))
+print("Avg Loss            :", round(avg_loss, 4))
+print("Expectancy          :", round(expectancy, 4))
+print("Avg Holding (days)  :", round(avg_holding, 2))
+
+print("\n--- Last 5 Rows ---")
+print(df[['close', 'signal', 'position', 'capital', 'equity_curve']].tail())
