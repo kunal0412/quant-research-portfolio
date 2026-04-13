@@ -33,7 +33,7 @@ def run_backtest(df, initial_capital=1, risk_pct=0.02, slippage=0.0005):
         # =========================================
         # ENTRY (FIXED)
         # =========================================
-        if position == 0 and prev_signal == 0 and current_signal == 1:
+        if position == 0 and current_signal == 1:
 
             entry_price = price * (1 + slippage)
 
