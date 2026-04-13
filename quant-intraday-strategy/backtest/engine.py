@@ -2,152 +2,161 @@ import pandas as pd
 import numpy as np
 
 
-# =========================================
-# POSITION SIZE CALCULATION
-# =========================================
-
-def calculate_position_size(capital, risk_pct, price, atr, atr_multiplier=2):
-    """
-    Position sizing based on risk per trade.
-
-    Position Size = (Capital * Risk %) / (ATR * multiplier)
-
-    Caps position to max 100% capital exposure.
-    """
-
-    risk_amount = capital * risk_pct
-    stop_loss_distance = atr * atr_multiplier
-
-    if stop_loss_distance == 0 or np.isnan(stop_loss_distance):
-        return 0
-
-    position_size = risk_amount / stop_loss_distance
-
-    # Cap position size (no leverage beyond 100%)
-    max_position = capital / price
-    position_size = min(position_size, max_position)
-
-    return position_size
-
-
-# =========================================
-# POSITION GENERATION + CAPITAL TRACKING
-# =========================================
-
-def generate_positions(df, initial_capital=1, risk_pct=0.01, cost_per_trade=0.0001):
-    """
-    Core backtest engine with:
-    - Single position at a time
-    - Risk-based sizing
-    - ATR stop loss
-    - Momentum exit
-    - Mark-to-market capital tracking
-    - Transaction cost modeling
-    """
+def run_backtest(df, initial_capital=1, risk_pct=0.02, slippage=0.0005):
 
     df = df.copy()
 
-    capital = initial_capital
+    capital = float(initial_capital)
+
     position = 0
+    units = 0
+    max_units = 2
+
     entry_price = 0
+    stop_loss = 0
     position_size = 0
+    risk_per_unit = 0
 
-    positions = []
-    capital_curve = []
+    df['position'] = 0
+    df['capital'] = np.full(len(df), capital, dtype=float)
+    df['equity_curve'] = np.full(len(df), capital, dtype=float)
 
-    for i in range(len(df)):
+    trades = []
+
+    for i in range(1, len(df)):
 
         row = df.iloc[i]
+        prev_row = df.iloc[i - 1]
         price = row['close']
-        atr = row['atr']
-        signal = row['signal']
 
-        # =========================
-        # HANDLE NaN ATR
-        # =========================
-        if np.isnan(atr):
-            positions.append(0)
-            capital_curve.append(capital)
-            continue
-
-        # =========================
+        # =========================================
         # ENTRY
-        # =========================
-        if position == 0 and signal == 1:
+        # =========================================
+        if position == 0 and prev_row['signal'] == 1:
+
+            entry_price = price * (1 + slippage)
+
+            stop_loss = entry_price - (1.5 * row['atr'])
+            risk_per_unit = entry_price - stop_loss
+
+            if risk_per_unit <= 0:
+                continue
+
+            risk_amount = capital * risk_pct
+            position_size = risk_amount / risk_per_unit
 
             position = 1
-            entry_price = price
+            units = 1
+            entry_index = df.index[i]
 
-            position_size = calculate_position_size(
-                capital, risk_pct, price, atr
-            )
-
-            # Apply transaction cost (entry)
-            capital -= capital * cost_per_trade
-
-        # =========================
-        # EXIT CONDITIONS
-        # =========================
+        # =========================================
+        # POSITION MANAGEMENT
+        # =========================================
         elif position == 1:
 
-            stop_loss = entry_price - 2 * atr
+            current_R = (price - entry_price) / risk_per_unit
 
+            # =====================================
+            # PYRAMIDING
+            # =====================================
+
+            # Add at +1R
+            if current_R >= 1 and units == 1:
+
+                add_size = (capital * risk_pct) / risk_per_unit
+                position_size += add_size
+                units += 1
+
+                # Move stop to breakeven
+                stop_loss = max(stop_loss, entry_price)
+
+            # Add at +2R
+            elif current_R >= 2 and units == 2 and max_units >= 3:
+
+                add_size = (capital * risk_pct) / risk_per_unit
+                position_size += add_size
+                units += 1
+
+                # Lock profit
+                stop_loss = max(stop_loss, entry_price + risk_per_unit)
+
+            # =====================================
+            # TRAILING STOP (STARTS AT 3R)
+            # =====================================
+            if current_R >= 3:
+                new_stop = entry_price + (current_R - 1.5) * risk_per_unit
+                stop_loss = max(stop_loss, new_stop)
+
+            # =====================================
+            # EXIT
+            # =====================================
             exit_flag = False
+            exit_price = price
 
-            # Stop loss
             if price <= stop_loss:
                 exit_flag = True
-
-            # Trend breakdown exit
-            elif row['ema_50'] < row['ema_200']:
-                exit_flag = True
-
-            # Trail stop using EMA
-            trailing_stop = row['ema_50']
-
-            if price < trailing_stop:
-               exit_flag = True
+                exit_price = stop_loss * (1 - slippage)
 
             if exit_flag:
-                pnl = position_size * (price - entry_price)
+
+                pnl = (exit_price - entry_price) * position_size
                 capital += pnl
 
-                # Apply transaction cost (exit)
-                capital -= capital * cost_per_trade
+                trades.append({
+                    'entry_price': entry_price,
+                    'exit_price': exit_price,
+                    'pnl': pnl,
+                    'holding_days': (df.index[i] - entry_index).days,
+                    'units': units
+                })
 
                 position = 0
                 position_size = 0
+                units = 0
 
-        # =========================
-        # MARK-TO-MARKET EQUITY
-        # =========================
-        if position == 1:
-            unrealized_pnl = position_size * (price - entry_price)
-            capital_marked = capital + unrealized_pnl
-        else:
-            capital_marked = capital
+        # =========================================
+        # UPDATE DF
+        # =========================================
+        df.loc[df.index[i], 'position'] = position
+        df.loc[df.index[i], 'capital'] = capital
+        df.loc[df.index[i], 'equity_curve'] = capital
 
-        positions.append(position)
-        capital_curve.append(capital_marked)
+    # =========================================
+    # METRICS
+    # =========================================
 
-    df['position'] = positions
-    df['capital'] = capital_curve
+    equity = df['equity_curve']
 
-    return df
+    peak = equity.cummax()
+    drawdown = (equity - peak) / peak
+    max_dd = drawdown.min()
 
+    trades_df = pd.DataFrame(trades)
+    total_trades = len(trades_df)
 
-# =========================================
-# BACKTEST WRAPPER
-# =========================================
+    if total_trades > 0:
+        wins = trades_df[trades_df['pnl'] > 0]
+        losses = trades_df[trades_df['pnl'] <= 0]
 
-def run_backtest(df):
-    """
-    Computes equity curve from capital.
-    """
+        win_rate = len(wins) / total_trades
+        avg_win = wins['pnl'].mean() if len(wins) > 0 else 0
+        avg_loss = losses['pnl'].mean() if len(losses) > 0 else 0
 
-    df = df.copy()
+        expectancy = (win_rate * avg_win) + ((1 - win_rate) * avg_loss)
 
-    df['equity_curve'] = df['capital'] / df['capital'].iloc[0]
-    df.loc[df.index[0], 'equity_curve'] = 1
+        avg_holding = trades_df['holding_days'].mean()
+    else:
+        win_rate = avg_win = avg_loss = expectancy = avg_holding = 0
 
-    return df
+    results = {
+        'final_equity': equity.iloc[-1],
+        'max_drawdown': max_dd,
+        'total_trades': total_trades,
+        'win_rate': win_rate,
+        'avg_win': avg_win,
+        'avg_loss': avg_loss,
+        'expectancy': expectancy,
+        'avg_holding_days': avg_holding
+    }
+
+    return df, trades_df, results
