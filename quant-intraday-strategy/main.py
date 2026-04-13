@@ -4,6 +4,7 @@ import pandas as pd
 from data.data_loader import load_kaggle_data
 from strategy.signals import generate_signals
 from backtest.engine import run_backtest
+from analytics.performance import compute_performance
 
 
 # =========================================
@@ -11,8 +12,8 @@ from backtest.engine import run_backtest
 # =========================================
 
 SYMBOL = "S&P500"
-INITIAL_CAPITAL = 1
-RISK_PER_TRADE = 0.01   # 1% risk per trade
+INITIAL_CAPITAL = 1.0
+RISK_PER_TRADE = 0.02   # 2% risk
 
 
 # =========================================
@@ -41,38 +42,41 @@ df = generate_signals(df)
 # RUN BACKTEST
 # =========================================
 
-df, trades, results = run_backtest(df)
+df, trades, engine_results = run_backtest(
+    df,
+    initial_capital=INITIAL_CAPITAL,
+    risk_pct=RISK_PER_TRADE
+)
 
 
 # =========================================
-# OUTPUT RESULTS
+# PERFORMANCE ANALYTICS
+# =========================================
+
+results = compute_performance(df, trades)
+
+
+# =========================================
+# OUTPUT
 # =========================================
 
 print("\n================ BACKTEST RESULTS ================\n")
 
-print(f"Final Equity        : {results['final_equity']:.4f}")
-print(f"Max Drawdown        : {results['max_drawdown']:.4f}")
-print(f"Total Trades        : {results['total_trades']}")
+for key, value in results.items():
+    if isinstance(value, float):
+        print(f"{key:25}: {value:.4f}")
+    else:
+        print(f"{key:25}: {value}")
 
-if results['total_trades'] > 0:
-    print("\n--- Trade Stats ---")
-    print(f"Win Rate            : {results['win_rate']:.4f}")
-    print(f"Avg Win             : {results['avg_win']:.4f}")
-    print(f"Avg Loss            : {results['avg_loss']:.4f}")
-    print(f"Expectancy          : {results['expectancy']:.4f}")
-    print(f"Avg Holding (days)  : {results['avg_holding_days']:.2f}")
-
-# =========================================
-# OPTIONAL: SAVE TRADES (FOR ANALYSIS)
-# =========================================
-
-# Uncomment if you want to inspect trades
-# trades.to_csv(os.path.join(BASE_DIR, "trades.csv"), index=False)
-
-
-# =========================================
-# LAST FEW ROWS (SANITY CHECK)
-# =========================================
 
 print("\n--- Last 5 Rows ---")
 print(df[['close', 'signal', 'position', 'capital', 'equity_curve']].tail())
+
+
+# =========================================
+# OPTIONAL: SAVE OUTPUTS
+# =========================================
+
+# Uncomment if needed
+# df.to_csv("output_backtest.csv")
+# trades.to_csv("output_trades.csv", index=False)
