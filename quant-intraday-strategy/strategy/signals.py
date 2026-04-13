@@ -19,24 +19,30 @@ def generate_signals(df):
 
     df = df.copy()
 
-    # Indicators
-    df['ema_20'] = EMA(df['close'], 20)
-    df['ema_50'] = EMA(df['close'], 50)
+    # =========================================
+    # INDICATORS
+    # =========================================
+    df['ema_fast'] = EMA(df['close'], 10)
+    df['ema_slow'] = EMA(df['close'], 25)
     df['atr'] = ATR(df)
 
+    # =========================================
+    # CONDITIONS
+    # =========================================
+
     # Trend
-    trend = df['ema_20'] > df['ema_50']
+    trend = df['ema_fast'] > df['ema_slow']
 
-    # Moderate trend strength (relaxed)
-    trend_strength = (df['ema_20'] - df['ema_50']) / df['ema_50']
-    strong_trend = trend_strength > 0.005   # reduced from 1% → 0.5%
+    # Optional trend strength (light filter)
+    trend_strength = (df['ema_fast'] - df['ema_slow']) / df['ema_slow']
+    strong_trend = trend_strength > 0.002   # 0.2%
 
-    # Breakout (relaxed from 20 → 10)
-    breakout = df['close'] > df['high'].rolling(10).max().shift(1)
+    # Breakout
+    breakout = df['close'] > df['high'].shift(1)
 
-    # REMOVE volume filter (important)
-    # REMOVE pullback filter for now
-
+    # =========================================
+    # SIGNAL
+    # =========================================
     df['signal'] = 0
 
     df.loc[

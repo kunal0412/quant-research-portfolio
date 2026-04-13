@@ -25,18 +25,19 @@ def run_backtest(df, initial_capital=1, risk_pct=0.02, slippage=0.0005):
 
     for i in range(1, len(df)):
 
-        row = df.iloc[i]
-        prev_row = df.iloc[i - 1]
-        price = row['close']
+        price = df['close'].iloc[i]
+
+        prev_signal = df['signal'].iloc[i - 1]
+        current_signal = df['signal'].iloc[i]
 
         # =========================================
-        # ENTRY
+        # ENTRY (FIXED)
         # =========================================
-        if position == 0 and prev_row['signal'] == 1:
+        if position == 0 and prev_signal == 0 and current_signal == 1:
 
             entry_price = price * (1 + slippage)
 
-            stop_loss = entry_price - (1.5 * row['atr'])
+            stop_loss = entry_price - (1.5 * df['atr'].iloc[i])
             risk_per_unit = entry_price - stop_loss
 
             if risk_per_unit <= 0:
@@ -60,7 +61,6 @@ def run_backtest(df, initial_capital=1, risk_pct=0.02, slippage=0.0005):
             # PYRAMIDING
             # =====================================
 
-            # Add at +1R
             if current_R >= 1 and units == 1:
 
                 add_size = (capital * risk_pct) / risk_per_unit
@@ -70,7 +70,6 @@ def run_backtest(df, initial_capital=1, risk_pct=0.02, slippage=0.0005):
                 # Move stop to breakeven
                 stop_loss = max(stop_loss, entry_price)
 
-            # Add at +2R
             elif current_R >= 2 and units == 2 and max_units >= 3:
 
                 add_size = (capital * risk_pct) / risk_per_unit
@@ -81,23 +80,18 @@ def run_backtest(df, initial_capital=1, risk_pct=0.02, slippage=0.0005):
                 stop_loss = max(stop_loss, entry_price + risk_per_unit)
 
             # =====================================
-            # TRAILING STOP (STARTS AT 3R)
+            # TRAILING STOP
             # =====================================
-            if current_R >= 3:
-                new_stop = entry_price + (current_R - 1.5) * risk_per_unit
+            if current_R >= 1:
+                new_stop = entry_price + (current_R - 1) * risk_per_unit
                 stop_loss = max(stop_loss, new_stop)
 
             # =====================================
             # EXIT
             # =====================================
-            exit_flag = False
-            exit_price = price
-
             if price <= stop_loss:
-                exit_flag = True
-                exit_price = stop_loss * (1 - slippage)
 
-            if exit_flag:
+                exit_price = stop_loss * (1 - slippage)
 
                 pnl = (exit_price - entry_price) * position_size
                 capital += pnl
@@ -110,16 +104,17 @@ def run_backtest(df, initial_capital=1, risk_pct=0.02, slippage=0.0005):
                     'units': units
                 })
 
+                # RESET EVERYTHING
                 position = 0
                 position_size = 0
                 units = 0
 
         # =========================================
-        # UPDATE DF
+        # UPDATE DF (SAFE)
         # =========================================
         df.loc[df.index[i], 'position'] = position
-        df.loc[df.index[i], 'capital'] = capital
-        df.loc[df.index[i], 'equity_curve'] = capital
+        df.loc[df.index[i], 'capital'] = float(capital)
+        df.loc[df.index[i], 'equity_curve'] = float(capital)
 
     # =========================================
     # METRICS
@@ -143,7 +138,6 @@ def run_backtest(df, initial_capital=1, risk_pct=0.02, slippage=0.0005):
         avg_loss = losses['pnl'].mean() if len(losses) > 0 else 0
 
         expectancy = (win_rate * avg_win) + ((1 - win_rate) * avg_loss)
-
         avg_holding = trades_df['holding_days'].mean()
     else:
         win_rate = avg_win = avg_loss = expectancy = avg_holding = 0
