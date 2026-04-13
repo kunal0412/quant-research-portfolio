@@ -4,7 +4,6 @@ import pandas as pd
 from data.data_loader import load_kaggle_data
 from strategy.signals import generate_signals
 from backtest.engine import run_backtest
-from analytics.performance import compute_performance
 
 
 # =========================================
@@ -13,7 +12,7 @@ from analytics.performance import compute_performance
 
 SYMBOL = "S&P500"
 INITIAL_CAPITAL = 1.0
-RISK_PER_TRADE = 0.02   # 2% risk
+RISK_PER_TRADE = 0.02
 
 
 # =========================================
@@ -37,23 +36,18 @@ df = load_kaggle_data(file_path, symbol=SYMBOL)
 
 df = generate_signals(df)
 
+print("Total Signals Generated:", int(df['signal'].sum()))
+
 
 # =========================================
 # RUN BACKTEST
 # =========================================
 
-df, trades, engine_results = run_backtest(
+df, trades, results = run_backtest(
     df,
     initial_capital=INITIAL_CAPITAL,
     risk_pct=RISK_PER_TRADE
 )
-
-
-# =========================================
-# PERFORMANCE ANALYTICS
-# =========================================
-
-results = compute_performance(df, trades)
 
 
 # =========================================
@@ -68,15 +62,5 @@ for key, value in results.items():
     else:
         print(f"{key:25}: {value}")
 
-
 print("\n--- Last 5 Rows ---")
 print(df[['close', 'signal', 'position', 'capital', 'equity_curve']].tail())
-
-
-# =========================================
-# OPTIONAL: SAVE OUTPUTS
-# =========================================
-
-# Uncomment if needed
-# df.to_csv("output_backtest.csv")
-# trades.to_csv("output_trades.csv", index=False)
