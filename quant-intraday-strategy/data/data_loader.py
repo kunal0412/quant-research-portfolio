@@ -1,69 +1,62 @@
-import pandas as pd
+# =========================================
+# LOAD DATA (BLOOMBERG GC FIXED)
+# =========================================
+
+df = pd.read_csv(file_path)
+
+print("Columns in CSV:", df.columns.tolist())
 
 
-def load_kaggle_data(filepath, symbol="S&P500"):
-    """
-    Load and clean Kaggle global financial markets dataset.
+# =========================================
+# DATETIME
+# =========================================
 
-    Parameters:
-    - filepath: path to CSV file
-    - symbol: asset_name to filter (e.g., 'S&P500', 'DAX', etc.)
+df['Date-Time'] = pd.to_datetime(df['Date-Time'])
+df.set_index('Date-Time', inplace=True)
 
-    Returns:
-    - Clean pandas DataFrame with OHLCV data indexed by datetime
-    """
+# Remove timezone (optional but cleaner)
+df.index = df.index.tz_convert(None)
 
-    # =========================
-    # LOAD DATA
-    # =========================
-    df = pd.read_csv(filepath)
 
-    # Standardize column names
-    df.columns = [col.lower().strip() for col in df.columns]
+# =========================================
+# RENAME COLUMNS
+# =========================================
 
-    # =========================
-    # DATE HANDLING
-    # =========================
-    df['date'] = pd.to_datetime(df['date'], errors='coerce')
-    df = df.dropna(subset=['date'])
+df.rename(columns={
+    'Open': 'open',
+    'High': 'high',
+    'Low': 'low',
+    'Last': 'close',
+    'Volume': 'volume'
+}, inplace=True)
 
-    # =========================
-    # FILTER SYMBOL
-    # =========================
-    df = df[df['asset_name'] == symbol]
 
-    if df.empty:
-        raise ValueError(f"No data found for asset: {symbol}")
+# =========================================
+# DROP UNUSED COLUMN
+# =========================================
 
-    # =========================
-    # SORT + INDEX
-    # =========================
-    df = df.sort_values('date')
-    df.set_index('date', inplace=True)
+if '#RIC' in df.columns:
+    df.drop(columns=['#RIC'], inplace=True)
 
-    # =========================
-    # KEEP REQUIRED COLUMNS
-    # =========================
-    required_cols = ['open', 'high', 'low', 'close', 'volume']
 
-    missing_cols = [col for col in required_cols if col not in df.columns]
-    if missing_cols:
-        raise ValueError(f"Missing columns: {missing_cols}")
+# =========================================
+# CLEAN DATA
+# =========================================
 
-    df = df[required_cols]
+df = df.sort_index()
 
-    # =========================
-    # CLEANING
-    # =========================
-    df = df[~df.index.duplicated(keep='first')]
+for col in ['open', 'high', 'low', 'close']:
+    df[col] = pd.to_numeric(df[col], errors='coerce')
 
-    # Ensure numeric
-    df = df.apply(pd.to_numeric, errors='coerce')
+df.dropna(inplace=True)
 
-    # Drop NaNs
-    df = df.dropna()
 
-    # Remove zero/negative prices (data sanity)
-    df = df[(df['close'] > 0) & (df['high'] > 0) & (df['low'] > 0)]
+# =========================================
+# FINAL CHECK
+# =========================================
 
-    return df
+print("\n--- DATA CHECK ---")
+print(df.head())
+print("\nColumns:", df.columns.tolist())
+print("Timezone:", df.index.tz)
+print("Total rows:", len(df))

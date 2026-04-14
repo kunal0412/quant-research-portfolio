@@ -1,9 +1,7 @@
 import os
 import pandas as pd
-import numpy as np
 
-from data.data_loader import load_kaggle_data
-from strategy.signals import generate_signals
+from strategy.signals import generate_intraday_signals
 from backtest.engine import run_backtest
 
 
@@ -11,9 +9,9 @@ from backtest.engine import run_backtest
 # CONFIG
 # =========================================
 
-SYMBOL = "S&P500"
 INITIAL_CAPITAL = 1.0
 RISK_PER_TRADE = 0.02
+SLIPPAGE = 0.0005
 
 
 # =========================================
@@ -25,68 +23,127 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 file_path = os.path.join(
     BASE_DIR,
     "data",
-    "global_financial_markets_2000_Now.csv"
+    "GCcv1.csv"
 )
 
-df = load_kaggle_data(file_path, symbol=SYMBOL)
+df = pd.read_csv(file_path)
+
+
+# =========================================
+# DATETIME HANDLING
+# =========================================
+
+if 'date' in df.columns:
+    df['date'] = pd.to_datetime(df['date'])
+    df.set_index('date', inplace=True)
+
+elif 'datetime' in df.columns:
+    df['datetime'] = pd.to_datetime(df['datetime'])
+    df.set_index('datetime', inplace=True)
+
+else:
+    raise ValueError("CSV must contain 'date' or 'datetime' column")
+
+df = df.sort_index()
+
+
+# =========================================
+# CLEAN DATA
+# =========================================
+
+for col in ['open', 'high', 'low', 'close']:
+    df[col] = pd.to_numeric(df[col], errors='coerce')
+
+df.dropna(inplace=True)
+
+
+# =========================================
+# DEBUG INFO
+# =========================================
+
+print("\n--- DATA CHECK ---")
+print(df.head())
+print("\nTotal rows:", len(df))
+print("Timezone:", df.index.tz)
 
 
 # =========================================
 # GENERATE SIGNALS
 # =========================================
 
-df = generate_signals(df)
+df = generate_intraday_signals(df)
 
-print("Total Signals Generated:", int(df['signal'].sum()))
+print("\nTotal Signals Generated:", int(df['signal'].sum()))
 
 
 # =========================================
 # RUN BACKTEST
 # =========================================
 
-df, trades, results = run_backtest(
+df, trades_df, results = run_backtest(
     df,
     initial_capital=INITIAL_CAPITAL,
-    risk_pct=RISK_PER_TRADE
+    risk_pct=RISK_PER_TRADE,
+    slippage=SLIPPAGE
 )
 
 
 # =========================================
-# EXTRA PERFORMANCE METRICS
+# PERFORMANCE METRICS
 # =========================================
 
-equity = df['equity_curve']
+def compute_performance(df, trades_df):
 
-# CAGR
-years = (df.index[-1] - df.index[0]).days / 365
-cagr = (equity.iloc[-1] / equity.iloc[0]) ** (1 / years) - 1
+    equity = df['equity_curve']
 
-# Returns
-df['returns'] = equity.pct_change().fillna(0)
+    # Time calculation
+    total_minutes = (df.index[-1] - df.index[0]).total_seconds() / 60
+    days = total_minutes / (60 * 24)
+    years = days / 365 if days > 0 else 1
 
-# Sharpe
-sharpe = np.sqrt(252) * df['returns'].mean() / (df['returns'].std() + 1e-9)
+    # CAGR
+    cagr = (equity.iloc[-1] ** (1 / years)) - 1 if years > 0 else 0
 
-# Drawdown
-peak = equity.cummax()
-drawdown = (equity - peak) / peak
-max_dd = drawdown.min()
+    # Sharpe (intraday adjusted)
+    returns = equity.pct_change().fillna(0)
+    sharpe = (returns.mean() / (returns.std() + 1e-9)) * (252 ** 0.5)
 
-# Trade stats
-if len(trades) > 0:
-    trades_df = trades.copy()
+    # Drawdown
+    peak = equity.cummax()
+    drawdown = (equity - peak) / peak
+    max_dd = drawdown.min()
 
-    wins = trades_df[trades_df['pnl'] > 0]
-    losses = trades_df[trades_df['pnl'] <= 0]
+    # Trade stats
+    total_trades = len(trades_df)
 
-    win_rate = len(wins) / len(trades_df)
-    avg_win = wins['pnl'].mean() if len(wins) > 0 else 0
-    avg_loss = losses['pnl'].mean() if len(losses) > 0 else 0
+    if total_trades > 0:
+        wins = trades_df[trades_df['pnl'] > 0]
+        losses = trades_df[trades_df['pnl'] < 0]
 
-    expectancy = (win_rate * avg_win) + ((1 - win_rate) * avg_loss)
-    avg_holding = trades_df['holding_days'].mean()
-else:
-    win_rate = avg_win = avg_loss = expectancy = avg_holding = 0
+        win_rate = len(wins) / total_trades
+        avg_win = wins['pnl'].mean() if len(wins) > 0 else 0
+        avg_loss = losses['pnl'].mean() if len(losses) > 0 else 0
+
+        expectancy = (win_rate * avg_win) + ((1 - win_rate) * avg_loss)
+        avg_holding = trades_df['holding_minutes'].mean()
+    else:
+        win_rate = avg_win = avg_loss = expectancy = avg_holding = 0
+
+    return {
+        'final_equity': float(equity.iloc[-1]),
+        'cagr': float(cagr),
+        'sharpe': float(sharpe),
+        'max_drawdown': float(max_dd),
+        'total_trades': total_trades,
+        'win_rate': float(win_rate),
+        'avg_win': float(avg_win),
+        'avg_loss': float(avg_loss),
+        'expectancy': float(expectancy),
+        'avg_holding_minutes': float(avg_holding)
+    }
+
+
+results = compute_performance(df, trades_df)
 
 
 # =========================================
@@ -95,18 +152,19 @@ else:
 
 print("\n================ BACKTEST RESULTS ================\n")
 
-print(f"{'Final Equity':25}: {equity.iloc[-1]:.4f}")
-print(f"{'CAGR':25}: {cagr:.4f}")
-print(f"{'Sharpe':25}: {sharpe:.4f}")
-print(f"{'Max Drawdown':25}: {max_dd:.4f}")
-print(f"{'Total Trades':25}: {len(trades)}")
-
-print("\n--- Trade Stats ---")
-print(f"{'Win Rate':25}: {win_rate:.4f}")
-print(f"{'Avg Win':25}: {avg_win:.4f}")
-print(f"{'Avg Loss':25}: {avg_loss:.4f}")
-print(f"{'Expectancy':25}: {expectancy:.4f}")
-print(f"{'Avg Holding Days':25}: {avg_holding:.2f}")
+for k, v in results.items():
+    if isinstance(v, float):
+        print(f"{k:<25}: {v:.4f}")
+    else:
+        print(f"{k:<25}: {v}")
 
 print("\n--- Last 5 Rows ---")
 print(df[['close', 'signal', 'position', 'capital', 'equity_curve']].tail())
+
+
+# =========================================
+# OPTIONAL SAVE
+# =========================================
+
+# trades_df.to_csv("gc_intraday_trades.csv", index=False)
+# df.to_csv("gc_intraday_equity.csv")
