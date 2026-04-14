@@ -60,8 +60,8 @@ def run_backtest(df, initial_capital=1.0, risk_pct=0.02, slippage=0.0005):
             current_R = (price - entry_price) / risk_per_unit
 
             # trailing
-            if current_R >= 0.5:
-                new_stop = entry_price + (current_R - 0.5) * risk_per_unit
+            if current_R >= 2:
+                new_stop = entry_price + (current_R - 2) * risk_per_unit
                 stop_loss = max(stop_loss, new_stop)
 
             # exit

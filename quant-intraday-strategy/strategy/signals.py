@@ -15,42 +15,47 @@ def ATR(df, period=14):
     return tr.rolling(period).mean()
 
 
-def generate_signals(df):
+def generate_signals(
+    df,
+    fast_ema=10,
+    slow_ema=25,
+    long_ema=100,
+    atr_period=14,
+    vol_threshold=0.008
+):
 
     df = df.copy()
 
-    # =========================================
-    # INDICATORS
-    # =========================================
-    df['ema_fast'] = EMA(df['close'], 10)
-    df['ema_slow'] = EMA(df['close'], 25)
-    df['atr'] = ATR(df)
-
-    # =========================================
-    # CONDITIONS
-    # =========================================
+    # Indicators
+    df['ema_fast'] = EMA(df['close'], fast_ema)
+    df['ema_slow'] = EMA(df['close'], slow_ema)
+    df['ema_long'] = EMA(df['close'], long_ema)
+    df['atr'] = ATR(df, atr_period)
 
     # Trend
     trend = df['ema_fast'] > df['ema_slow']
 
-    # Optional trend strength (light filter)
+    # Trend strength
     trend_strength = (df['ema_fast'] - df['ema_slow']) / df['ema_slow']
-    strong_trend = trend_strength > 0.002   # 0.2%
+    strong_trend = trend_strength > 0.002
 
     # Breakout
-    breakout = df['close'] > df['high'].shift(1)
+    breakout = df['close'] > df['high'].rolling(5).max().shift(1)
 
-    # =========================================
-    # SIGNAL
-    # =========================================
+    # Regime filters
+    bullish_regime = df['close'] > df['ema_long']
+    volatility = df['atr'] / df['close']
+    high_vol = volatility > vol_threshold
+
+    # Signal
     df['signal'] = 0
 
     df.loc[
-        trend & strong_trend & breakout,
+        trend & strong_trend & breakout & bullish_regime & high_vol,
         'signal'
     ] = 1
 
-    # Avoid lookahead bias
+    # No lookahead bias
     df['signal'] = df['signal'].shift(1).fillna(0)
 
     return df
