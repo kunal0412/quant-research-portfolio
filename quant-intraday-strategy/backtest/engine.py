@@ -2,155 +2,130 @@ import numpy as np
 import pandas as pd
 
 
-def run_backtest(df, initial_capital=1.0, risk_pct=0.02, slippage=0.0005):
+def run_backtest(
+    df,
+    initial_capital=1.0,
+    risk_per_trade=0.01,   # FIXED risk (1%)
+    sl_pct=0.006,          # 0.6% SL
+    tp_pct=0.012,          # 1.2% TP
+    max_positions=3
+):
 
     df = df.copy()
 
-    n = len(df)
+    capital = initial_capital
 
-    # Arrays
-    position_arr = np.zeros(n)
-    capital_arr = np.zeros(n)
-    equity_arr = np.zeros(n)
+    open_trades = []
+    closed_trades = []
 
-    # State variables
-    capital = float(initial_capital)
-    position = 0
-    entry_price = 0
-    stop_loss = 0
-    position_size = 0
-    risk_per_unit = 0
-    entry_index = None
+    position_arr = []
+    capital_arr = []
+    equity_arr = []
 
-    trades = []
+    for i in range(len(df)):
 
-    capital_arr[0] = capital
-    equity_arr[0] = capital
-    position_arr[0] = 0
+        row = df.iloc[i]
+        price = row['close']
+        signal = row['signal']
+        current_time = df.index[i]
 
-    # =========================================
-    # MAIN LOOP
-    # =========================================
-    for i in range(1, n):
+        # =========================
+        # NEW TRADE ENTRY
+        # =========================
+        if signal == 1 and len(open_trades) < max_positions:
 
-        price = df['close'].iloc[i]
-        signal = df['signal'].iloc[i]
-        atr = df['atr'].iloc[i]
+            entry_price = price
 
-        # ======================================
-        # ENTRY
-        # ======================================
-        if position == 0:
+            sl_price = entry_price * (1 - sl_pct)
+            tp_price = entry_price * (1 + tp_pct)
 
-            if signal == 1 and atr > 0:
+            risk_per_unit = entry_price - sl_price
 
-                entry_price = price * (1 + slippage)
+            if risk_per_unit > 0:
+                position_size = risk_per_trade / risk_per_unit
 
-                stop_loss = entry_price - (1.5 * atr)
-                risk_per_unit = entry_price - stop_loss
-
-                if risk_per_unit > 0:
-
-                    risk_amount = capital * risk_pct
-                    position_size = risk_amount / risk_per_unit
-
-                    position = 1
-                    entry_index = df.index[i]
-
-        # ======================================
-        # POSITION MANAGEMENT
-        # ======================================
-        elif position == 1:
-
-            # ===== TRAILING LOGIC =====
-            current_R = (price - entry_price) / risk_per_unit
-
-            if current_R >= 2:
-                new_stop = entry_price + (current_R - 1) * risk_per_unit
-                stop_loss = max(stop_loss, new_stop)
-
-            # ===== STOP LOSS EXIT (SAFE) =====
-            if price <= stop_loss:
-
-                if position_size > 0 and entry_price > 0:
-
-                    exit_price = stop_loss * (1 - slippage)
-
-                    pnl = (exit_price - entry_price) * position_size
-                    capital += pnl
-
-                    trades.append({
-                        'entry_price': entry_price,
-                        'exit_price': exit_price,
-                        'pnl': pnl,
-                        'holding_minutes': (df.index[i] - entry_index).total_seconds() / 60
-                    })
-
-                position = 0
-                position_size = 0
-                entry_price = 0
-                stop_loss = 0
-
-        # ======================================
-        # FORCE EXIT ON LAST BAR (CRITICAL FIX)
-        # ======================================
-        is_last_bar = (i == n - 1)
-
-        if position == 1 and is_last_bar:
-
-            if position_size > 0 and entry_price > 0:
-
-                exit_price = price * (1 - slippage)
-
-                pnl = (exit_price - entry_price) * position_size
-                capital += pnl
-
-                trades.append({
+                open_trades.append({
                     'entry_price': entry_price,
-                    'exit_price': exit_price,
-                    'pnl': pnl,
-                    'holding_minutes': (df.index[i] - entry_index).total_seconds() / 60
+                    'sl': sl_price,
+                    'tp': tp_price,
+                    'size': position_size,
+                    'entry_time': current_time
                 })
 
-            position = 0
-            position_size = 0
-            entry_price = 0
-            stop_loss = 0
+        # =========================
+        # MANAGE OPEN TRADES
+        # =========================
+        remaining_trades = []
 
-        # ======================================
-        # CAPITAL SAFETY (ANTI-BLOWUP)
-        # ======================================
-        capital = max(capital, 0)
+        for trade in open_trades:
 
-        # ======================================
+            exit_flag = False
+            exit_price = price
+
+            # STOP LOSS
+            if row['low'] <= trade['sl']:
+                exit_price = trade['sl']
+                exit_flag = True
+
+            # TAKE PROFIT
+            elif row['high'] >= trade['tp']:
+                exit_price = trade['tp']
+                exit_flag = True
+
+            # INTRADAY SQUARE OFF (2nd last candle)
+            elif i < len(df) - 1:
+                next_day = df.index[i + 1].date()
+                if current_time.date() != next_day:
+                    exit_flag = True
+                    exit_price = price
+
+            if exit_flag:
+
+                pnl = (exit_price - trade['entry_price']) * trade['size']
+                capital += pnl
+
+                ret = pnl / risk_per_trade
+
+                closed_trades.append({
+                    'entry_time': trade['entry_time'],
+                    'exit_time': current_time,
+                    'entry_price': trade['entry_price'],
+                    'exit_price': exit_price,
+                    'pnl': pnl,
+                    'return': ret,
+                    'holding_minutes': (current_time - trade['entry_time']).total_seconds() / 60
+                })
+
+            else:
+                remaining_trades.append(trade)
+
+        open_trades = remaining_trades
+
+        # =========================
         # STORE STATE
-        # ======================================
-        position_arr[i] = position
-        capital_arr[i] = capital
-        equity_arr[i] = capital
+        # =========================
+        position_arr.append(len(open_trades))
+        capital_arr.append(capital)
+        equity_arr.append(capital)
 
-    # =========================================
-    # SAVE TO DATAFRAME
-    # =========================================
     df['position'] = position_arr
     df['capital'] = capital_arr
     df['equity_curve'] = equity_arr
 
-    # =========================================
-    # PERFORMANCE SUMMARY
-    # =========================================
+    trades_df = pd.DataFrame(closed_trades)
+
+    # =========================
+    # METRICS
+    # =========================
     equity = df['equity_curve']
 
     peak = equity.cummax()
     drawdown = (equity - peak) / peak
-    max_dd = drawdown.min()
-
-    trades_df = pd.DataFrame(trades)
 
     results = {
         'final_equity': float(equity.iloc[-1]),
-        'max_drawdown': float(max_dd),
-        'total_trades': int(len(trades_df))
+        'max_drawdown': float(drawdown.min()),
+        'total_trades': len(trades_df)
     }
 
     return df, trades_df, results
