@@ -213,5 +213,5 @@ print(df[['close', 'signal', 'position', 'capital', 'equity_curve']].tail())
 # OPTIONAL SAVE
 # =========================================
 
-trades_df.to_csv("gc_intraday_trades.csv", index=False)
-df.to_csv("gc_intraday_equity.csv")
+#trades_df.to_csv("gc_intraday_trades.csv", index=False)
+#df.to_csv("gc_intraday_equity.csv")
