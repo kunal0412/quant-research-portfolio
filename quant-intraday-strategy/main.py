@@ -28,28 +28,46 @@ file_path = os.path.join(
 
 df = pd.read_csv(file_path)
 
+print("Columns in CSV:", df.columns.tolist())
+
 
 # =========================================
-# DATETIME HANDLING
+# DATETIME (BLOOMBERG FIX)
 # =========================================
 
-if 'date' in df.columns:
-    df['date'] = pd.to_datetime(df['date'])
-    df.set_index('date', inplace=True)
+df['Date-Time'] = pd.to_datetime(df['Date-Time'])
+df.set_index('Date-Time', inplace=True)
 
-elif 'datetime' in df.columns:
-    df['datetime'] = pd.to_datetime(df['datetime'])
-    df.set_index('datetime', inplace=True)
+# Convert UTC → naive (cleaner for pandas ops)
+df.index = df.index.tz_convert(None)
 
-else:
-    raise ValueError("CSV must contain 'date' or 'datetime' column")
 
-df = df.sort_index()
+# =========================================
+# RENAME COLUMNS
+# =========================================
+
+df.rename(columns={
+    'Open': 'open',
+    'High': 'high',
+    'Low': 'low',
+    'Last': 'close',
+    'Volume': 'volume'
+}, inplace=True)
+
+
+# =========================================
+# DROP UNUSED COLUMN
+# =========================================
+
+if '#RIC' in df.columns:
+    df.drop(columns=['#RIC'], inplace=True)
 
 
 # =========================================
 # CLEAN DATA
 # =========================================
+
+df = df.sort_index()
 
 for col in ['open', 'high', 'low', 'close']:
     df[col] = pd.to_numeric(df[col], errors='coerce')
@@ -63,7 +81,8 @@ df.dropna(inplace=True)
 
 print("\n--- DATA CHECK ---")
 print(df.head())
-print("\nTotal rows:", len(df))
+print("\nColumns:", df.columns.tolist())
+print("Total rows:", len(df))
 print("Timezone:", df.index.tz)
 
 
@@ -104,7 +123,7 @@ def compute_performance(df, trades_df):
     # CAGR
     cagr = (equity.iloc[-1] ** (1 / years)) - 1 if years > 0 else 0
 
-    # Sharpe (intraday adjusted)
+    # Sharpe (intraday approx)
     returns = equity.pct_change().fillna(0)
     sharpe = (returns.mean() / (returns.std() + 1e-9)) * (252 ** 0.5)
 

@@ -1,6 +1,14 @@
+import pandas as pd
+
 # =========================================
 # LOAD DATA (BLOOMBERG GC FIXED)
 # =========================================
+
+import os
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+file_path = os.path.join(BASE_DIR, "GCcv1.csv")
 
 df = pd.read_csv(file_path)
 

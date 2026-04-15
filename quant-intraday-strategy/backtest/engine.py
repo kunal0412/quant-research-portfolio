@@ -1,166 +1,144 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 
-def run_backtest(
-    df,
-    initial_capital=1.0,
-    risk_pct=0.02,
-    slippage=0.0005
-):
+def run_backtest(df, initial_capital=1.0, risk_pct=0.02, slippage=0.0005):
 
     df = df.copy()
+
     n = len(df)
 
+    # Arrays
     position_arr = np.zeros(n)
-    capital_arr = np.zeros(n, dtype=float)
-    equity_arr = np.zeros(n, dtype=float)
+    capital_arr = np.zeros(n)
+    equity_arr = np.zeros(n)
 
+    # State variables
     capital = float(initial_capital)
-
-    # =========================
-    # TRADE STATE
-    # =========================
-    in_position = False
-
+    position = 0
     entry_price = 0
     stop_loss = 0
+    position_size = 0
     risk_per_unit = 0
-
-    lots = []
     entry_index = None
 
     trades = []
 
     capital_arr[0] = capital
     equity_arr[0] = capital
+    position_arr[0] = 0
 
-    # =========================
-    # LOOP
-    # =========================
-    for i in range(2, n - 1):
+    # =========================================
+    # MAIN LOOP
+    # =========================================
+    for i in range(1, n):
 
         price = df['close'].iloc[i]
         signal = df['signal'].iloc[i]
         atr = df['atr'].iloc[i]
 
         # ======================================
-        # DAY STRUCTURE DETECTION
+        # ENTRY
         # ======================================
-        current_date = df.index[i].date()
-        next_date = df.index[i + 1].date()
-        next_next_date = df.index[i + 2].date() if i + 2 < n else next_date
+        if position == 0:
 
-        is_last_bar = next_date != current_date
-        is_second_last_bar = next_next_date != next_date
+            if signal == 1 and atr > 0:
 
-        # ======================================
-        # ENTRY (ONLY ONE TRADE AT A TIME)
-        # ======================================
-        if not in_position and signal == 1:
+                entry_price = price * (1 + slippage)
 
-            entry_price = price * (1 + slippage)
+                stop_loss = entry_price - (1.5 * atr)
+                risk_per_unit = entry_price - stop_loss
 
-            stop_loss = entry_price - (1.5 * atr)
-            risk_per_unit = entry_price - stop_loss
+                if risk_per_unit > 0:
 
-            if risk_per_unit > 0:
+                    risk_amount = capital * risk_pct
+                    position_size = risk_amount / risk_per_unit
 
-                risk_amount = capital * risk_pct
-                position_size = risk_amount / risk_per_unit
-
-                lots = [entry_price]
-                in_position = True
-                entry_index = df.index[i]
+                    position = 1
+                    entry_index = df.index[i]
 
         # ======================================
         # POSITION MANAGEMENT
         # ======================================
-        elif in_position:
+        elif position == 1:
 
-            # ----------------------------------
-            # PYRAMIDING (1R ADD)
-            # ----------------------------------
-            last_add_price = lots[-1]
+            # ===== TRAILING LOGIC =====
+            current_R = (price - entry_price) / risk_per_unit
 
-            if price >= last_add_price + risk_per_unit:
-                lots.append(price)
+            if current_R >= 2:
+                new_stop = entry_price + (current_R - 1) * risk_per_unit
+                stop_loss = max(stop_loss, new_stop)
 
-            # ----------------------------------
-            # TRAILING STOP (1R)
-            # ----------------------------------
-            new_stop = price - risk_per_unit
-            stop_loss = max(stop_loss, new_stop)
-
-            # ----------------------------------
-            # EXIT 1: STOP LOSS
-            # ----------------------------------
+            # ===== STOP LOSS EXIT (SAFE) =====
             if price <= stop_loss:
 
-                exit_price = stop_loss * (1 - slippage)
+                if position_size > 0 and entry_price > 0:
 
-                total_pnl = sum([(exit_price - lp) for lp in lots])
+                    exit_price = stop_loss * (1 - slippage)
 
-                risk_amount = capital * risk_pct
-                total_pnl *= (risk_amount / risk_per_unit)
+                    pnl = (exit_price - entry_price) * position_size
+                    capital += pnl
 
-                capital += total_pnl
+                    trades.append({
+                        'entry_price': entry_price,
+                        'exit_price': exit_price,
+                        'pnl': pnl,
+                        'holding_minutes': (df.index[i] - entry_index).total_seconds() / 60
+                    })
 
-                trades.append({
-                    'entry_time': entry_index,
-                    'exit_time': df.index[i],
-                    'exit_type': 'SL',
-                    'num_lots': len(lots),
-                    'pnl': total_pnl,
-                    'holding_minutes': (df.index[i] - entry_index).total_seconds() / 60
-                })
+                position = 0
+                position_size = 0
+                entry_price = 0
+                stop_loss = 0
 
-                in_position = False
-                lots = []
+        # ======================================
+        # FORCE EXIT ON LAST BAR (CRITICAL FIX)
+        # ======================================
+        is_last_bar = (i == n - 1)
 
-            # ----------------------------------
-            # EXIT 2: SECOND LAST CANDLE (KEY RULE)
-            # ----------------------------------
-            elif is_second_last_bar:
+        if position == 1 and is_last_bar:
+
+            if position_size > 0 and entry_price > 0:
 
                 exit_price = price * (1 - slippage)
 
-                total_pnl = sum([(exit_price - lp) for lp in lots])
-
-                risk_amount = capital * risk_pct
-                total_pnl *= (risk_amount / risk_per_unit)
-
-                capital += total_pnl
+                pnl = (exit_price - entry_price) * position_size
+                capital += pnl
 
                 trades.append({
-                    'entry_time': entry_index,
-                    'exit_time': df.index[i],
-                    'exit_type': 'EOD_2ND_LAST',
-                    'num_lots': len(lots),
-                    'pnl': total_pnl,
+                    'entry_price': entry_price,
+                    'exit_price': exit_price,
+                    'pnl': pnl,
                     'holding_minutes': (df.index[i] - entry_index).total_seconds() / 60
                 })
 
-                in_position = False
-                lots = []
+            position = 0
+            position_size = 0
+            entry_price = 0
+            stop_loss = 0
+
+        # ======================================
+        # CAPITAL SAFETY (ANTI-BLOWUP)
+        # ======================================
+        capital = max(capital, 0)
 
         # ======================================
         # STORE STATE
         # ======================================
-        position_arr[i] = 1 if in_position else 0
+        position_arr[i] = position
         capital_arr[i] = capital
         equity_arr[i] = capital
 
-    # =========================
-    # SAVE
-    # =========================
+    # =========================================
+    # SAVE TO DATAFRAME
+    # =========================================
     df['position'] = position_arr
     df['capital'] = capital_arr
     df['equity_curve'] = equity_arr
 
-    # =========================
-    # METRICS
-    # =========================
+    # =========================================
+    # PERFORMANCE SUMMARY
+    # =========================================
     equity = df['equity_curve']
 
     peak = equity.cummax()
@@ -172,7 +150,7 @@ def run_backtest(
     results = {
         'final_equity': float(equity.iloc[-1]),
         'max_drawdown': float(max_dd),
-        'total_trades': len(trades_df)
+        'total_trades': int(len(trades_df))
     }
 
     return df, trades_df, results
