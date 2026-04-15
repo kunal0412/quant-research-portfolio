@@ -215,3 +215,32 @@ print(df[['close', 'signal', 'position', 'capital', 'equity_curve']].tail())
 
 #trades_df.to_csv("gc_intraday_trades.csv", index=False)
 #df.to_csv("gc_intraday_equity.csv")
+
+# =========================================
+# EXPORT RESULTS TO EXCEL
+# =========================================
+
+output_path = "backtest_results.xlsx"
+
+# -------- Trades Sheet --------
+trades_export = trades_df.copy()
+
+# Add R multiple if not present
+if 'R_multiple' not in trades_export.columns:
+    if 'pnl' in trades_export.columns:
+        trades_export['R_multiple'] = trades_export['pnl'] / 0.001  # since risk = 0.001
+
+# -------- Equity Curve --------
+equity_export = df[['equity_curve']].copy()
+equity_export.reset_index(inplace=True)
+
+# -------- Summary --------
+summary_export = pd.DataFrame(list(results.items()), columns=['Metric', 'Value'])
+
+# -------- Save to Excel --------
+with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+    trades_export.to_excel(writer, sheet_name='Trades', index=False)
+    equity_export.to_excel(writer, sheet_name='Equity Curve', index=False)
+    summary_export.to_excel(writer, sheet_name='Summary', index=False)
+
+print(f"\n✅ Excel exported to: {output_path}")
