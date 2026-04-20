@@ -10,103 +10,73 @@ from backtest.engine import run_backtest
 # CONFIG
 # =========================================
 
-INITIAL_CAPITAL = 1.0
-RISK_PER_TRADE = 0.01   # 🔥 1% risk per trade
+CONFIG = {
+    "data_file": "GCcv1.csv",
+    "data_folder": "data",
+
+    "initial_capital": 1.0,
+    "risk_per_trade": 0.01,
+
+    "output_file": "backtest_results.xlsx"
+}
 
 
 # =========================================
-# LOAD DATA
+# PATH HANDLER
 # =========================================
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-file_path = os.path.join(
-    BASE_DIR,
-    "data",
-    "GCcv1.csv"
-)
-
-df = pd.read_csv(file_path)
-
-print("Columns in CSV:", df.columns.tolist())
+def get_data_path():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_dir, CONFIG["data_folder"], CONFIG["data_file"])
 
 
 # =========================================
-# DATETIME HANDLING
+# LOAD DATA (FAST + SAFE)
 # =========================================
 
-if 'Date-Time' in df.columns:
-    df['Date-Time'] = pd.to_datetime(df['Date-Time'])
+def load_data(file_path):
+
+    df = pd.read_csv(file_path)
+
+    print("Columns in CSV:", df.columns.tolist())
+
+    if 'Date-Time' not in df.columns:
+        raise ValueError("CSV must contain 'Date-Time' column")
+
+    # ⚡ Faster datetime parsing
+    df['Date-Time'] = pd.to_datetime(df['Date-Time'], errors='coerce')
+    df.dropna(subset=['Date-Time'], inplace=True)
+
     df.set_index('Date-Time', inplace=True)
-else:
-    raise ValueError("CSV must contain 'Date-Time' column")
 
-# Remove timezone if present
-if df.index.tz is not None:
-    df.index = df.index.tz_convert(None)
+    if df.index.tz is not None:
+        df.index = df.index.tz_convert(None)
 
-df = df.sort_index()
+    df.sort_index(inplace=True)
 
+    df.rename(columns={
+        'Open': 'open',
+        'High': 'high',
+        'Low': 'low',
+        'Last': 'close',
+        'Volume': 'volume'
+    }, inplace=True)
 
-# =========================================
-# RENAME COLUMNS
-# =========================================
+    if '#RIC' in df.columns:
+        df.drop(columns=['#RIC'], inplace=True)
 
-df.rename(columns={
-    'Open': 'open',
-    'High': 'high',
-    'Low': 'low',
-    'Last': 'close',
-    'Volume': 'volume'
-}, inplace=True)
+    # ⚡ Vectorized numeric conversion
+    df[['open', 'high', 'low', 'close', 'volume']] = df[
+        ['open', 'high', 'low', 'close', 'volume']
+    ].apply(pd.to_numeric, errors='coerce')
 
-if '#RIC' in df.columns:
-    df.drop(columns=['#RIC'], inplace=True)
+    df.dropna(inplace=True)
 
-
-# =========================================
-# CLEAN DATA
-# =========================================
-
-for col in ['open', 'high', 'low', 'close', 'volume']:
-    df[col] = pd.to_numeric(df[col], errors='coerce')
-
-df.dropna(inplace=True)
+    return df
 
 
 # =========================================
-# DEBUG INFO
-# =========================================
-
-print("\n--- DATA CHECK ---")
-print(df.head())
-print("\nColumns:", df.columns.tolist())
-print("Total rows:", len(df))
-print("Timezone:", df.index.tz)
-
-
-# =========================================
-# GENERATE SIGNALS
-# =========================================
-
-df = generate_intraday_signals(df)
-
-print("\nTotal Signals Generated:", int(df['signal'].sum()))
-
-
-# =========================================
-# RUN BACKTEST
-# =========================================
-
-df, trades_df, results = run_backtest(
-    df,
-    initial_capital=INITIAL_CAPITAL,
-    risk_per_trade=RISK_PER_TRADE
-)
-
-
-# =========================================
-# PERFORMANCE METRICS
+# PERFORMANCE ENGINE
 # =========================================
 
 def compute_performance(df, trades_df):
@@ -114,11 +84,10 @@ def compute_performance(df, trades_df):
     equity = df['equity_curve']
 
     # -------------------------
-    # Time calculation
+    # TIME
     # -------------------------
     total_minutes = (df.index[-1] - df.index[0]).total_seconds() / 60
-    days = total_minutes / (60 * 24)
-    years = days / 365 if days > 0 else 1
+    years = (total_minutes / (60 * 24 * 365)) if total_minutes > 0 else 1
 
     # -------------------------
     # CAGR
@@ -126,37 +95,25 @@ def compute_performance(df, trades_df):
     cagr = (equity.iloc[-1] ** (1 / years)) - 1 if years > 0 else 0
 
     # -------------------------
-    # RETURNS (TIME-BASED)
+    # RETURNS
     # -------------------------
     returns = equity.pct_change().dropna()
 
-    # -------------------------
-    # SHARPE RATIO (REAL)
-    # -------------------------
-    if returns.std() > 0:
-        sharpe = (returns.mean() / returns.std()) * np.sqrt(252 * 24 * 60)
-    else:
-        sharpe = 0
+    annual_factor = np.sqrt(252 * 24 * 60)
 
-    # -------------------------
-    # SORTINO RATIO
-    # -------------------------
-    downside_returns = returns[returns < 0]
+    sharpe = (returns.mean() / returns.std()) * annual_factor if returns.std() > 0 else 0
 
-    if downside_returns.std() > 0:
-        sortino = (returns.mean() / downside_returns.std()) * np.sqrt(252 * 24 * 60)
-    else:
-        sortino = 0
+    downside = returns[returns < 0]
+    sortino = (returns.mean() / downside.std()) * annual_factor if downside.std() > 0 else 0
 
     # -------------------------
     # DRAWDOWN
     # -------------------------
     peak = equity.cummax()
     drawdown = (equity - peak) / peak
-    max_dd = drawdown.min()
 
     # -------------------------
-    # TRADE STATS
+    # TRADE METRICS
     # -------------------------
     total_trades = len(trades_df)
 
@@ -180,7 +137,7 @@ def compute_performance(df, trades_df):
         'cagr': float(cagr),
         'sharpe': float(sharpe),
         'sortino': float(sortino),
-        'max_drawdown': float(max_dd),
+        'max_drawdown': float(drawdown.min()),
         'total_trades': total_trades,
         'win_rate': float(win_rate),
         'avg_win_R': float(avg_win),
@@ -190,57 +147,74 @@ def compute_performance(df, trades_df):
     }
 
 
-results = compute_performance(df, trades_df)
+# =========================================
+# EXPORT ENGINE
+# =========================================
+
+def export_results(df, trades_df, results):
+
+    output_path = CONFIG["output_file"]
+
+    trades_export = trades_df.copy()
+
+    if 'R_multiple' not in trades_export.columns and 'pnl' in trades_export.columns:
+        trades_export['R_multiple'] = trades_export['pnl'] / CONFIG["risk_per_trade"]
+
+    equity_export = df[['equity_curve']].reset_index()
+    summary_export = pd.DataFrame(list(results.items()), columns=['Metric', 'Value'])
+
+    with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+        trades_export.to_excel(writer, sheet_name='Trades', index=False)
+        equity_export.to_excel(writer, sheet_name='Equity Curve', index=False)
+        summary_export.to_excel(writer, sheet_name='Summary', index=False)
+
+    print(f"\n✅ Excel exported to: {output_path}")
 
 
 # =========================================
-# OUTPUT
+# MAIN PIPELINE
 # =========================================
 
-print("\n================ BACKTEST RESULTS ================\n")
+def main():
 
-for k, v in results.items():
-    if isinstance(v, float):
-        print(f"{k:<25}: {v:.4f}")
-    else:
-        print(f"{k:<25}: {v}")
+    print("\n🚀 Running Institutional Backtest Pipeline\n")
 
-print("\n--- Last 5 Rows ---")
-print(df[['close', 'signal', 'position', 'capital', 'equity_curve']].tail())
+    # LOAD
+    df = load_data(get_data_path())
+
+    print("\n--- DATA CHECK ---")
+    print(df.head())
+    print("\nRows:", len(df))
+
+    # SIGNALS
+    df = generate_intraday_signals(df)
+    print("\nSignals Generated:", int(df['signal'].sum()))
+
+    # BACKTEST
+    df, trades_df, _ = run_backtest(
+        df,
+        initial_capital=CONFIG["initial_capital"],
+        risk_per_trade=CONFIG["risk_per_trade"]
+    )
+
+    # PERFORMANCE
+    results = compute_performance(df, trades_df)
+
+    # PRINT
+    print("\n================ RESULTS ================\n")
+    for k, v in results.items():
+        print(f"{k:<25}: {v:.4f}" if isinstance(v, float) else f"{k:<25}: {v}")
+
+    print("\n--- Last 5 Rows ---")
+    print(df[['close', 'signal', 'position', 'capital', 'equity_curve']].tail())
+
+    # EXPORT
+    export_results(df, trades_df, results)
 
 
 # =========================================
-# OPTIONAL SAVE
+# ENTRY POINT
 # =========================================
 
-#trades_df.to_csv("gc_intraday_trades.csv", index=False)
-#df.to_csv("gc_intraday_equity.csv")
-
-# =========================================
-# EXPORT RESULTS TO EXCEL
-# =========================================
-
-output_path = "backtest_results.xlsx"
-
-# -------- Trades Sheet --------
-trades_export = trades_df.copy()
-
-# Add R multiple if not present
-if 'R_multiple' not in trades_export.columns:
-    if 'pnl' in trades_export.columns:
-        trades_export['R_multiple'] = trades_export['pnl'] / 0.001  # since risk = 0.001
-
-# -------- Equity Curve --------
-equity_export = df[['equity_curve']].copy()
-equity_export.reset_index(inplace=True)
-
-# -------- Summary --------
-summary_export = pd.DataFrame(list(results.items()), columns=['Metric', 'Value'])
-
-# -------- Save to Excel --------
-with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-    trades_export.to_excel(writer, sheet_name='Trades', index=False)
-    equity_export.to_excel(writer, sheet_name='Equity Curve', index=False)
-    summary_export.to_excel(writer, sheet_name='Summary', index=False)
-
-print(f"\n✅ Excel exported to: {output_path}")
+if __name__ == "__main__":
+    main()
