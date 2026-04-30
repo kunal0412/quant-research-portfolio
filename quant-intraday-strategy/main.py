@@ -11,7 +11,7 @@ from backtest.engine import run_backtest
 # =========================================
 
 CONFIG = {
-    "data_file": "GCcv1_last_6_months.csv",
+    "data_file": "NIFTY 50_minute.csv",
     "data_folder": "data",
 
     "initial_capital": 1.0,

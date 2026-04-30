@@ -40,20 +40,31 @@ def run_backtest(
         current_time = time_index[i]
 
         # =========================
-        # ENTRY
+        # ENTRY (LONG + SHORT)
         # =========================
-        if signal[i] == 1 and len(open_trades) == 0 and capital > 0:
+        if signal[i] != 0 and len(open_trades) < max_positions and capital > 0:
 
+            direction = signal[i]  # +1 or -1
             entry_price = price
-            sl_price = entry_price * (1 - sl_pct)
-            tp_price = entry_price * (1 + tp_pct)
 
-            risk_per_unit = entry_price - sl_price
+            # -------------------------
+            # SL / TP (direction-aware)
+            # -------------------------
+            if direction == 1:  # LONG
+                sl_price = entry_price * (1 - sl_pct)
+                tp_price = entry_price * (1 + tp_pct)
+                risk_per_unit = entry_price - sl_price
+
+            else:  # SHORT
+                sl_price = entry_price * (1 + sl_pct)
+                tp_price = entry_price * (1 - tp_pct)
+                risk_per_unit = sl_price - entry_price
 
             if risk_per_unit > 0:
                 size = risk_per_trade / risk_per_unit
 
                 open_trades.append({
+                    'direction': direction,
                     'entry_price': entry_price,
                     'sl': sl_price,
                     'tp': tp_price,
@@ -68,33 +79,51 @@ def run_backtest(
 
         for trade in open_trades:
 
+            direction = trade['direction']
             exit_flag = False
             exit_price = price
 
-            # SL
-            if low[i] <= trade['sl']:
-                exit_price = trade['sl']
-                exit_flag = True
+            # -------------------------
+            # STOP LOSS / TAKE PROFIT
+            # -------------------------
+            if direction == 1:  # LONG
+                if low[i] <= trade['sl']:
+                    exit_price = trade['sl']
+                    exit_flag = True
 
-            # TP
-            elif high[i] >= trade['tp']:
-                exit_price = trade['tp']
-                exit_flag = True
+                elif high[i] >= trade['tp']:
+                    exit_price = trade['tp']
+                    exit_flag = True
 
-            # EOD EXIT
-            elif i < n - 1:
-                if current_time.date() != time_index[i + 1].date():
+            else:  # SHORT
+                if high[i] >= trade['sl']:
+                    exit_price = trade['sl']
+                    exit_flag = True
+
+                elif low[i] <= trade['tp']:
+                    exit_price = trade['tp']
+                    exit_flag = True
+
+            # -------------------------
+            # NSE END-OF-DAY EXIT
+            # -------------------------
+            if not exit_flag:
+                if current_time.time() >= pd.to_datetime("15:25").time():
                     exit_flag = True
                     exit_price = price
 
+            # -------------------------
+            # EXECUTE EXIT
+            # -------------------------
             if exit_flag:
 
-                pnl = (exit_price - trade['entry_price']) * trade['size']
+                pnl = (exit_price - trade['entry_price']) * trade['size'] * direction
                 capital += pnl
 
                 closed_trades.append({
                     'entry_time': trade['entry_time'],
                     'exit_time': current_time,
+                    'direction': direction,
                     'entry_price': trade['entry_price'],
                     'exit_price': exit_price,
                     'pnl': pnl,
@@ -113,7 +142,11 @@ def run_backtest(
         unrealized_pnl = 0
 
         for trade in open_trades:
-            unrealized_pnl += (price - trade['entry_price']) * trade['size']
+            unrealized_pnl += (
+                (price - trade['entry_price']) *
+                trade['size'] *
+                trade['direction']
+            )
 
         equity = capital + unrealized_pnl
 
@@ -134,7 +167,7 @@ def run_backtest(
     trades_df = pd.DataFrame(closed_trades)
 
     # =========================================
-    # METRICS
+    # BASIC METRICS
     # =========================================
     equity = df['equity_curve']
 

@@ -11,8 +11,8 @@ from backtest.engine import run_backtest
 # =========================================
 
 CONFIG = {
-    "data_file": "GCcv1_last_6_months.csv",
-    "data_folder": "data",
+    "data_file": "NIFTY50_minute.csv",   # <-- changed
+    "data_folder": "data",                   # keep empty if file in same folder
 
     "initial_capital": 1.0,
     "risk_per_trade": 0.01,
@@ -31,7 +31,7 @@ def get_data_path():
 
 
 # =========================================
-# LOAD DATA (FAST + SAFE)
+# LOAD DATA (ROBUST VERSION)
 # =========================================
 
 def load_data(file_path):
@@ -40,34 +40,60 @@ def load_data(file_path):
 
     print("Columns in CSV:", df.columns.tolist())
 
-    if 'Date-Time' not in df.columns:
-        raise ValueError("CSV must contain 'Date-Time' column")
+    # =========================================
+    # FLEXIBLE DATETIME HANDLING
+    # =========================================
+    if 'Date-Time' in df.columns:
+        df['Date-Time'] = pd.to_datetime(df['Date-Time'], errors='coerce')
 
-    # ⚡ Faster datetime parsing
-    df['Date-Time'] = pd.to_datetime(df['Date-Time'], errors='coerce')
+    elif 'datetime' in df.columns:
+        df['Date-Time'] = pd.to_datetime(df['datetime'], errors='coerce')
+
+    elif 'Date' in df.columns and 'Time' in df.columns:
+        df['Date-Time'] = pd.to_datetime(
+            df['Date'].astype(str) + ' ' + df['Time'].astype(str),
+            errors='coerce'
+        )
+
+    else:
+        raise ValueError("No valid datetime column found")
+
     df.dropna(subset=['Date-Time'], inplace=True)
-
     df.set_index('Date-Time', inplace=True)
 
+    # Remove timezone if exists
     if df.index.tz is not None:
         df.index = df.index.tz_convert(None)
 
     df.sort_index(inplace=True)
 
+    # =========================================
+    # COLUMN STANDARDIZATION
+    # =========================================
     df.rename(columns={
         'Open': 'open',
         'High': 'high',
         'Low': 'low',
-        'Last': 'close',
+        'Close': 'close',   # <-- critical fix
+        'Last': 'close',    # backward compatibility
         'Volume': 'volume'
     }, inplace=True)
 
+    # Drop unnecessary columns
     if '#RIC' in df.columns:
         df.drop(columns=['#RIC'], inplace=True)
 
-    # ⚡ Vectorized numeric conversion
-    df[['open', 'high', 'low', 'close', 'volume']] = df[
-        ['open', 'high', 'low', 'close', 'volume']
+    # =========================================
+    # NUMERIC CONVERSION
+    # =========================================
+    required_cols = ['open', 'high', 'low', 'close']
+
+    if 'volume' not in df.columns:
+        print("⚠️ Volume not found — creating dummy volume")
+        df['volume'] = 1
+
+    df[required_cols + ['volume']] = df[
+        required_cols + ['volume']
     ].apply(pd.to_numeric, errors='coerce')
 
     df.dropna(inplace=True)
@@ -87,7 +113,7 @@ def compute_performance(df, trades_df):
     # TIME
     # -------------------------
     total_minutes = (df.index[-1] - df.index[0]).total_seconds() / 60
-    years = (total_minutes / (60 * 24 * 365)) if total_minutes > 0 else 1
+    years = (total_minutes / (375 * 252)) if total_minutes > 0 else 1
 
     # -------------------------
     # CAGR
@@ -99,7 +125,8 @@ def compute_performance(df, trades_df):
     # -------------------------
     returns = equity.pct_change().dropna()
 
-    annual_factor = np.sqrt(252 * 24 * 60)
+    # NSE adjusted annualization
+    annual_factor = np.sqrt(252 * 375)
 
     sharpe = (returns.mean() / returns.std()) * annual_factor if returns.std() > 0 else 0
 
@@ -177,7 +204,7 @@ def export_results(df, trades_df, results):
 
 def main():
 
-    print("\n🚀 Running Institutional Backtest Pipeline\n")
+    print("\n🚀 Running Institutional Backtest Pipeline (NIFTY Ready)\n")
 
     # LOAD
     df = load_data(get_data_path())
@@ -188,6 +215,10 @@ def main():
 
     # SIGNALS
     df = generate_intraday_signals(df)
+
+    if 'signal' not in df.columns:
+        raise ValueError("Signal column not generated")
+
     print("\nSignals Generated:", int(df['signal'].sum()))
 
     # BACKTEST
