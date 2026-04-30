@@ -8,7 +8,7 @@ def run_backtest(
     risk_per_trade=0.01,
     sl_pct=0.006,
     tp_pct=0.012,
-    max_positions=3
+    max_positions=1
 ):
 
     # =========================================
@@ -42,7 +42,7 @@ def run_backtest(
         # =========================
         # ENTRY
         # =========================
-        if signal[i] == 1 and len(open_trades) < max_positions:
+        if signal[i] == 1 and len(open_trades) == 0 and capital > 0:
 
             entry_price = price
             sl_price = entry_price * (1 - sl_pct)
