@@ -11,10 +11,10 @@ from backtest.engine import run_backtest
 # =========================================
 
 CONFIG = {
-    "data_file": "NIFTY50_minute.csv",   # <-- changed
-    "data_folder": "data",                   # keep empty if file in same folder
+    "data_file": "NIFTY50_minute.csv",
+    "data_folder": "data",
 
-    "initial_capital": 1.0,
+    "initial_capital": 10_000_000,   # ₹1 crore
     "risk_per_trade": 0.01,
 
     "output_file": "backtest_results.xlsx"
@@ -31,65 +31,40 @@ def get_data_path():
 
 
 # =========================================
-# LOAD DATA (ROBUST VERSION)
+# LOAD DATA
 # =========================================
 
 def load_data(file_path):
 
+    print(f"\n📂 Loading file from: {file_path}\n")
+
     df = pd.read_csv(file_path)
 
-    print("Columns in CSV:", df.columns.tolist())
+    df.columns = [col.lower().strip() for col in df.columns]
 
-    # =========================================
-    # FLEXIBLE DATETIME HANDLING
-    # =========================================
-    if 'Date-Time' in df.columns:
-        df['Date-Time'] = pd.to_datetime(df['Date-Time'], errors='coerce')
+    print("Columns detected:", df.columns.tolist())
 
-    elif 'datetime' in df.columns:
-        df['Date-Time'] = pd.to_datetime(df['datetime'], errors='coerce')
+    if 'date' not in df.columns:
+        raise ValueError("Expected 'date' column in CSV")
 
-    elif 'Date' in df.columns and 'Time' in df.columns:
-        df['Date-Time'] = pd.to_datetime(
-            df['Date'].astype(str) + ' ' + df['Time'].astype(str),
-            errors='coerce'
-        )
+    df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    df.dropna(subset=['date'], inplace=True)
 
-    else:
-        raise ValueError("No valid datetime column found")
+    df.set_index('date', inplace=True)
 
-    df.dropna(subset=['Date-Time'], inplace=True)
-    df.set_index('Date-Time', inplace=True)
-
-    # Remove timezone if exists
     if df.index.tz is not None:
         df.index = df.index.tz_convert(None)
 
     df.sort_index(inplace=True)
 
-    # =========================================
-    # COLUMN STANDARDIZATION
-    # =========================================
-    df.rename(columns={
-        'Open': 'open',
-        'High': 'high',
-        'Low': 'low',
-        'Close': 'close',   # <-- critical fix
-        'Last': 'close',    # backward compatibility
-        'Volume': 'volume'
-    }, inplace=True)
-
-    # Drop unnecessary columns
-    if '#RIC' in df.columns:
-        df.drop(columns=['#RIC'], inplace=True)
-
-    # =========================================
-    # NUMERIC CONVERSION
-    # =========================================
     required_cols = ['open', 'high', 'low', 'close']
 
+    for col in required_cols:
+        if col not in df.columns:
+            raise ValueError(f"Missing required column: {col}")
+
     if 'volume' not in df.columns:
-        print("⚠️ Volume not found — creating dummy volume")
+        print("⚠️ Volume missing → using dummy volume")
         df['volume'] = 1
 
     df[required_cols + ['volume']] = df[
@@ -98,34 +73,35 @@ def load_data(file_path):
 
     df.dropna(inplace=True)
 
+    print("\n✅ Data Loaded Successfully")
+    print("Rows:", len(df))
+    print(df.head())
+
     return df
 
 
 # =========================================
-# PERFORMANCE ENGINE
+# PERFORMANCE (FIXED CAGR)
 # =========================================
 
 def compute_performance(df, trades_df):
 
     equity = df['equity_curve']
 
-    # -------------------------
-    # TIME
-    # -------------------------
-    total_minutes = (df.index[-1] - df.index[0]).total_seconds() / 60
-    years = (total_minutes / (375 * 252)) if total_minutes > 0 else 1
+    initial_capital = equity.iloc[0]
+    final_equity = equity.iloc[-1]
 
-    # -------------------------
-    # CAGR
-    # -------------------------
-    cagr = (equity.iloc[-1] ** (1 / years)) - 1 if years > 0 else 0
+    # =========================
+    # TIME (FIXED)
+    # =========================
+    days = (df.index[-1] - df.index[0]).days
+    years = days / 365.25 if days > 0 else 1
 
-    # -------------------------
+    # =========================
     # RETURNS
-    # -------------------------
+    # =========================
     returns = equity.pct_change().dropna()
 
-    # NSE adjusted annualization
     annual_factor = np.sqrt(252 * 375)
 
     sharpe = (returns.mean() / returns.std()) * annual_factor if returns.std() > 0 else 0
@@ -133,105 +109,97 @@ def compute_performance(df, trades_df):
     downside = returns[returns < 0]
     sortino = (returns.mean() / downside.std()) * annual_factor if downside.std() > 0 else 0
 
-    # -------------------------
+    # =========================
+    # CAGR (FIXED)
+    # =========================
+    cagr = (final_equity / initial_capital) ** (1 / years) - 1 if years > 0 else 0
+
+    # =========================
     # DRAWDOWN
-    # -------------------------
+    # =========================
     peak = equity.cummax()
     drawdown = (equity - peak) / peak
 
-    # -------------------------
+    # =========================
     # TRADE METRICS
-    # -------------------------
+    # =========================
     total_trades = len(trades_df)
 
     if total_trades > 0:
-        wins = trades_df[trades_df['return'] > 0]
-        losses = trades_df[trades_df['return'] < 0]
+
+        wins = trades_df[trades_df['net_pnl'] > 0]
+        losses = trades_df[trades_df['net_pnl'] < 0]
 
         win_rate = len(wins) / total_trades
 
-        avg_win = wins['return'].mean() if len(wins) > 0 else 0
-        avg_loss = losses['return'].mean() if len(losses) > 0 else 0
+        avg_win = wins['net_pnl'].mean() if len(wins) > 0 else 0
+        avg_loss = losses['net_pnl'].mean() if len(losses) > 0 else 0
 
         expectancy = (win_rate * avg_win) + ((1 - win_rate) * avg_loss)
 
         avg_holding = trades_df['holding_minutes'].mean()
+        total_cost = trades_df['cost'].sum()
+
     else:
-        win_rate = avg_win = avg_loss = expectancy = avg_holding = 0
+        win_rate = avg_win = avg_loss = expectancy = avg_holding = total_cost = 0
 
     return {
-        'final_equity': float(equity.iloc[-1]),
+        'final_equity': float(final_equity),
         'cagr': float(cagr),
         'sharpe': float(sharpe),
         'sortino': float(sortino),
         'max_drawdown': float(drawdown.min()),
         'total_trades': total_trades,
         'win_rate': float(win_rate),
-        'avg_win_R': float(avg_win),
-        'avg_loss_R': float(avg_loss),
-        'expectancy_R': float(expectancy),
+        'avg_win_₹': float(avg_win),
+        'avg_loss_₹': float(avg_loss),
+        'expectancy_₹': float(expectancy),
+        'total_costs_₹': float(total_cost),
         'avg_holding_minutes': float(avg_holding)
     }
 
 
 # =========================================
-# EXPORT ENGINE
+# EXPORT
 # =========================================
 
 def export_results(df, trades_df, results):
 
     output_path = CONFIG["output_file"]
 
-    trades_export = trades_df.copy()
-
-    if 'R_multiple' not in trades_export.columns and 'pnl' in trades_export.columns:
-        trades_export['R_multiple'] = trades_export['pnl'] / CONFIG["risk_per_trade"]
-
     equity_export = df[['equity_curve']].reset_index()
     summary_export = pd.DataFrame(list(results.items()), columns=['Metric', 'Value'])
 
     with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-        trades_export.to_excel(writer, sheet_name='Trades', index=False)
+        trades_df.to_excel(writer, sheet_name='Trades', index=False)
         equity_export.to_excel(writer, sheet_name='Equity Curve', index=False)
         summary_export.to_excel(writer, sheet_name='Summary', index=False)
 
-    print(f"\n✅ Excel exported to: {output_path}")
+    print(f"\n📊 Results exported to: {output_path}")
 
 
 # =========================================
-# MAIN PIPELINE
+# MAIN
 # =========================================
 
 def main():
 
-    print("\n🚀 Running Institutional Backtest Pipeline (NIFTY Ready)\n")
+    print("\n🚀 NIFTY Backtest (Corrected & Realistic)\n")
 
-    # LOAD
     df = load_data(get_data_path())
 
-    print("\n--- DATA CHECK ---")
-    print(df.head())
-    print("\nRows:", len(df))
-
-    # SIGNALS
     df = generate_intraday_signals(df)
 
-    if 'signal' not in df.columns:
-        raise ValueError("Signal column not generated")
+    print("\n📡 Signals Generated:", int(df['signal'].abs().sum()))
 
-    print("\nSignals Generated:", int(df['signal'].sum()))
-
-    # BACKTEST
     df, trades_df, _ = run_backtest(
         df,
         initial_capital=CONFIG["initial_capital"],
         risk_per_trade=CONFIG["risk_per_trade"]
     )
 
-    # PERFORMANCE
     results = compute_performance(df, trades_df)
 
-    # PRINT
     print("\n================ RESULTS ================\n")
     for k, v in results.items():
         print(f"{k:<25}: {v:.4f}" if isinstance(v, float) else f"{k:<25}: {v}")
@@ -239,13 +207,8 @@ def main():
     print("\n--- Last 5 Rows ---")
     print(df[['close', 'signal', 'position', 'capital', 'equity_curve']].tail())
 
-    # EXPORT
     export_results(df, trades_df, results)
 
-
-# =========================================
-# ENTRY POINT
-# =========================================
 
 if __name__ == "__main__":
     main()

@@ -64,8 +64,8 @@ def generate_intraday_signals(df):
     # =========================================
     # BREAKOUTS
     # =========================================
-    rolling_high = df['high'].rolling(20).max().shift(1)
-    rolling_low = df['low'].rolling(20).min().shift(1)
+    rolling_high = df['high'].rolling(30).max().shift(1)
+    rolling_low = df['low'].rolling(30).min().shift(1)
 
     breakout_long = df['close'] > rolling_high
     breakout_short = df['close'] < rolling_low
