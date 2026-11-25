@@ -1,0 +1,22 @@
+# Raw market data: kept outside the repo (see each project's data/README.md)
+*/data/*.csv
+*/data/*.zip
+
+# Generated outputs (committed results live in results/)
+backtest_results.xlsx
+*/output/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# Secrets
+.env
+
+# OS and editor
+.DS_Store
+.vscode/
+.idea/
